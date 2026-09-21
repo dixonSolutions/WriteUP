@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+frontend/dist/
+
+# Runtime data (regenerated on first run / by users)
+data/writeup.db*
+data/outputs/
+data/thumbs/
+
+# OS / editor
+.DS_Store
