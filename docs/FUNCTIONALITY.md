@@ -37,20 +37,40 @@
 2. **Strategy A** — Otsu threshold (paper is usually the brightest large
    region) → morphological close → largest 4-point contour.
 3. **Strategy B** — Canny edges → dilate/close → largest 4-point contour.
-4. Fallback — minimum-area rectangle of the largest contour; if that fails or
-   the quad covers >92 % of the frame, the photo is treated as borderless.
-5. **Border-brightness heuristic** — if the ring outside the quad is ≥72 % as
+4. Fallback — minimum-area rectangle of the largest contour. Every candidate
+   must pass `_quad_is_valid` (minimum side length, minimum area, near-
+   convexity) so lighting-gradient blobs with degenerate corners are rejected.
+5. The quad is **clipped to the image bounds** — a tilted page photographed
+   partially out of frame keeps its visible region (this is what lets an open
+   notebook on a café table be detected as one writable surface).
+6. If the quad covers >92 % of the frame, the photo is treated as borderless.
+7. **Border-brightness heuristic** — if the ring outside the quad is ≥72 % as
    bright as the interior, the "background" is really more paper (vignette on
    a full-frame shot) → treat the whole frame as the page.
-6. Corners are ordered TL, TR, BR, BL via sum/difference of coordinates.
+8. Corners are ordered TL, TR, BR, BL by **angular sort around the centroid**
+   (the classic sum/difference trick mislabels corners of border-clipped and
+   strongly rotated quads).
 
 ### Style learning (`backend/app/style_learn.py`)
 
-From a sample photo: adaptive binarisation → connected components (glyphs) →
-robust statistics. Slant is the shear angle maximising vertical-projection
-variance. The chosen base font's *natural* slant is measured the same way and
-subtracted, so only the sample's *extra* lean is applied at render time.
-All lengths are stored relative to image height → resolution-independent.
+From a sample photo: adaptive binarisation → connected components → **clean
+mask of plausible glyphs only**: components must be modest in size, narrower
+than 6:1 (kills ruled-line fragments), and *locally dark* — mean contrast
+against a Gaussian-blurred background ≥ 25, so paper texture, stains and
+table edges caught by the threshold don't pollute measurements.
+
+- **Ink colour** — median of the darkest 40 % of clean-mask pixels (stroke
+  cores; anti-aliased edges and specks would wash the colour out).
+- **Deskew** — the clean mask is rotated to maximise horizontal-projection
+  variance first, because phone photos are always a few degrees off and that
+  rotation poisons every following measurement.
+- **Slant** — shear angle maximising vertical-projection variance on the
+  deskewed mask. The chosen base font's *natural* slant is measured the same
+  way and subtracted, so only the sample's *extra* lean is applied at render
+  time.
+- Glyph height, line pitch, baseline wander, size/char/word spacing — robust
+  statistics over the clean components. All lengths are stored relative to
+  image height → resolution-independent.
 
 ### Rendering (`backend/app/renderer.py`)
 

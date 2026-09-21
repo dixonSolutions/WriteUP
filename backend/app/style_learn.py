@@ -46,7 +46,7 @@ def _binarize(gray: np.ndarray) -> np.ndarray:
 def _estimate_slant(mask: np.ndarray) -> float:
     """Slant angle in degrees (positive = leans right).
 
-    Classic approach: shear the ink mask by candidate angles and pick the one
+    Classic fallback: shear the ink mask by candidate angles and pick the one
     that maximises the variance of the vertical projection profile.
     """
     h, w = mask.shape
@@ -61,6 +61,23 @@ def _estimate_slant(mask: np.ndarray) -> float:
         if score > best_score:
             best_score, best_angle = score, float(angle)
     return best_angle
+
+
+def _deskew(mask: np.ndarray) -> np.ndarray:
+    """Level the text baselines: rotate by the angle maximising horizontal
+    projection variance. Phone photos of pages are always slightly rotated,
+    and that rotation otherwise poisons slant/pitch measurements."""
+    h, w = mask.shape
+    ink = (mask > 0).astype(np.float32)
+    best_a, best_s = 0.0, -1.0
+    for a in np.linspace(-12, 12, 49):
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), float(a), 1.0)
+        rot = cv2.warpAffine(ink, M, (w, h))
+        s = float(rot.sum(axis=1).var())
+        if s > best_s:
+            best_s, best_a = s, float(a)
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), best_a, 1.0)
+    return (cv2.warpAffine(ink, M, (w, h)) * 255).astype(np.uint8)
 
 
 def _line_pitch(mask: np.ndarray) -> float | None:
@@ -113,26 +130,46 @@ def learn_from_image(image_bgr: np.ndarray) -> dict:
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     mask = _binarize(gray)
 
-    ink_px = image_bgr[mask > 0]
-    if len(ink_px) < 50:
-        return params  # essentially blank sample → defaults
-
-    # --- ink colour (median is robust to paper shadows caught in the mask)
-    params["ink_color"] = [int(v) for v in np.median(ink_px, axis=0)]
-
-    # --- connected components ≈ glyphs / glyph fragments
+    # --- connected components ≈ glyphs / glyph fragments.
+    # Real photos catch non-text regions in the raw mask (table edges, paper
+    # borders, stains), so every measurement below runs on a *clean* mask
+    # containing only plausible glyph components that are also *locally dark*
+    # (real ink contrasts with its neighbourhood; texture specks don't).
+    bg = cv2.GaussianBlur(gray, (0, 0), 12)
+    contrast = bg.astype(np.int16) - gray.astype(np.int16)
     n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
     heights, widths, areas, xs, ys, bottoms = [], [], [], [], [], []
+    valid_ids: list[int] = []
     for i in range(1, n):
         x, y, cw, ch, area = stats[i]
         if area < 8 or ch < 4 or cw < 1:
             continue
         if ch > h * 0.5 or cw > w * 0.5:
             continue  # ruled lines / borders, not glyphs
+        if area > 0.02 * h * w:
+            continue  # large blobs: table edges, stains, photo borders
+        if cw > ch * 6:
+            continue  # long thin slivers: ruled-line fragments, not glyphs
+        if float(contrast[labels == i].mean()) < 25:
+            continue  # texture speck, not ink
         heights.append(ch); widths.append(cw); areas.append(area)
         xs.append(x); ys.append(y); bottoms.append(y + ch)
+        valid_ids.append(i)
     if len(heights) < 10:
+        return params  # essentially blank sample → defaults
+    clean = np.where(np.isin(labels, valid_ids), 255, 0).astype(np.uint8)
+
+    # --- ink colour: median over the *darkest* glyph pixels. Stroke cores are
+    # the true ink; lighter masked pixels are texture speck or anti-aliased
+    # edges that would otherwise wash the colour out.
+    ink_px = image_bgr[clean > 0]
+    if len(ink_px) < 50:
         return params
+    ink_gray = gray[clean > 0]
+    cutoff = np.percentile(ink_gray, 40)
+    core = ink_px[ink_gray <= cutoff]
+    params["ink_color"] = [int(v) for v in np.median(core, axis=0)]
+    mask = clean
 
     heights_a = np.array(heights, dtype=np.float32)
     # Robust glyph height: median of the upper half (ascendered letters define
@@ -142,7 +179,13 @@ def learn_from_image(image_bgr: np.ndarray) -> dict:
     params["size_variance"] = round(
         float(np.std(heights_a) / max(np.mean(heights_a), 1e-6)) * 0.5, 4)
 
-    # --- slant
+    # --- deskew: level the baselines before measuring slant / pitch / wander
+    # (phone photos are always slightly rotated, which poisons all three).
+    # PCA component voting was tried and dropped: cursive entry/exit ligatures
+    # skew a letter's principal axis opposite to its true lean.
+    mask = _deskew(mask)
+
+    # --- slant: shear-variance projection on the deskewed clean mask
     params["slant_deg"] = round(_estimate_slant(mask), 2)
 
     # --- line pitch → spacing ratio

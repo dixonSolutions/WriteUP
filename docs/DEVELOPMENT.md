@@ -136,3 +136,77 @@ transfers to pages of any size.
   the sample image and reassemble them (true handwriting forgery mode).
 - Detection assumes a roughly rectangular, mostly-visible page.
 
+
+---
+
+## Session 3 — Real-world validation with web photos (2026-09-21)
+
+Goal: replace self-assembled test data with **real handwritten-paper photos
+from the web** (CC-licensed, via Openverse/Flickr) and harden the pipeline
+against what real photos actually look like.
+
+### Test set (all CC-licensed)
+
+| File | Source | Role |
+|---|---|---|
+| `paper_penandpaper.jpg` | Flickr "Pen and Paper" (CC-BY) | white card on wooden desk, pen lying on it, harsh flash |
+| `paper_coffeeshop.jpg` | Flickr "Trying new coffee shops" (CC-BY-NC-SA) | open tilted notebook on café table |
+| `paper_worktable.jpg` | Flickr "Small Home Working Table" (CC-BY) | notepad on cluttered desk, strong shadow across the pad |
+| `sample_santa.jpg` | Flickr "Letter to Santa" (CC-BY) | upright print, dark slate ink |
+| `sample_olddiary.jpg` | Flickr "Handwritten notes in an old diary" (CC-BY) | pencil, **left-leaning**, ruled paper, rotated photo |
+| `sample_loveletter.jpg` | Flickr "Love letter circa 2003" (CC-BY) | right-leaning old cursive, rotated photo |
+| `sample_pocock.jpg` | Flickr "Robert Pocock's Handwriting" (CC-BY) | dense right-leaning cursive, textured paper |
+
+### Bugs found only with real photos — and fixed
+
+1. **Page detection fragmented on cluttered desks.** Otsu on the worktable
+   photo split the shadowed notepad; the largest clean contour was 11.7% of
+   the frame, under the 18% minimum. → Lowered `MIN_AREA_FRACTION` to 0.08.
+2. **Degenerate quads from lighting gradients.** On full-frame synthetic
+   pages, soft lighting gradients threshold into diagonal blobs whose
+   4-point approximations had duplicate corners (BR == BL). → Added
+   `_quad_is_valid`: minimum side length, minimum area, near-convexity
+   (area ≥ 60% of convex hull — strict convexity rejects slightly-dented
+   but visually perfect quads).
+3. **`np.cross` removed for 2D vectors in NumPy 2.x.** → scalar cross
+   product `a.x*b.y - a.y*b.x`.
+4. **Frame-hugging minAreaRect fallback.** A tilted notebook's minAreaRect
+   extends past the frame (96.7% area) and was discarded as "full frame".
+   → Quads are now **clipped to the image bounds** before the 92% check —
+   writing across a photographed open notebook works.
+5. **Sum/diff corner ordering breaks on border-clipped quads** (a corner at
+   x=0 with large y wins both "min sum" and "max diff" → TL == BL). →
+   Replaced with **angular sort around the centroid** (ascending atan2 walks
+   clockwise in image coordinates), rotated so min-(x+y) starts.
+6. **Ink colour washed out by background specks.** Adaptive threshold caught
+   the tan table strip and paper-texture specks as "ink"; the median colour
+   became tan. → Measurements now run on a **clean mask of glyph-like
+   components** (size, aspect ≤ 6:1, area ≤ 2% of frame) that are **locally
+   dark** (mean contrast vs Gaussian background ≥ 25 — real ink contrasts
+   with its neighbourhood, texture specks don't). Ink colour is the median
+   of the darkest 40% of those pixels (stroke cores).
+7. **Slant poisoned by photo rotation.** Phone photos are always a few
+   degrees off; the shear-variance slant method then peaks at nonsense
+   angles (+25° for a left-leaning hand). → Added `_deskew` (rotate to
+   maximise horizontal-projection variance) before slant/pitch/wander.
+   All four real samples then measured within a few degrees of visual
+   ground truth. (PCA component voting was tried and **dropped**: cursive
+   entry/exit ligatures skew a letter's principal axis opposite to its
+   true lean.)
+8. **Test bug:** `verify_containment.py` picked "first paper with a quad",
+   which became the worktable photo — whose **own red pen and red header
+   bar** matched the pure-red test-ink mask (20k false pixels). The pipeline
+   was innocent; the test now pins synthetic papers by name.
+
+### Results
+
+- Detection: 11/11 correct (3 real desk photos → quads; 4 synthetic
+  full-frame pages → full-frame; 4 synthetic desk photos → quads).
+- Learned slants vs visual ground truth: santa −2° (upright ✓),
+  olddiary −23° (left-leaning pencil ✓), loveletter +21° (right cursive ✓),
+  pocock +30° (right cursive, clamped ✓).
+- Renders with real-learned styles onto real desk photos are
+  perspective-correct and colour-matched; see
+  `assets/demo/realworld/` for renders, detection overlays and the
+  real-vs-synthetic comparison.
+- Full verification suite: **ALL CHECKS PASSED**.

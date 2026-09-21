@@ -47,8 +47,19 @@ def main() -> int:
     papers = get("/papers")
     styles = get("/styles")
     style_id = styles[0]["id"]
-    desk = next(p for p in papers if p["quad"])
-    full = next(p for p in papers if not p["quad"])
+
+    # Pin the test papers to the *synthetic* gallery: real photos may contain
+    # red objects (pen, header bars) that confound the pure-red ink mask.
+    def pick(prefer_quad: bool):
+        synth = [p for p in papers if not p["name"].startswith(("REAL", "Uploaded"))]
+        for p in synth:
+            if bool(p["quad"]) == prefer_quad:
+                return p
+        return next(p for p in papers if bool(p["quad"]) == prefer_quad)
+
+    desk = pick(prefer_quad=True)
+    full = pick(prefer_quad=False)
+    print(f"desk paper: {desk['name']} | full-frame paper: {full['name']}")
 
     text = ("The quick brown fox jumps over the lazy dog. " * 400).strip()
 

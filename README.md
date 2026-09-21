@@ -39,6 +39,26 @@ Dark mode UI:
 
 ![Dark mode](assets/demo/ui_dark.jpg)
 
+## Real-world validation
+
+Tested with **real handwritten-paper photos from the web** (CC-licensed, via
+Openverse/Flickr) — not synthetic stand-ins. The CV finds the page on
+cluttered desks, learns ink colour and slant from real handwriting (including
+a left-leaning pencil hand and right-leaning cursive), and writes back onto
+the photographed pages in perspective.
+
+| Detection: notepad on a cluttered desk | Detection: open café notebook |
+|---|---|
+| ![Worktable detection](assets/demo/realworld/detection_worktable.jpg) | ![Notebook detection](assets/demo/realworld/detection_coffeeshop.jpg) |
+
+| Learned from a real letter → written on the desk pad | Learned pencil hand → café notebook |
+|---|---|
+| ![Santa style render](assets/demo/realworld/render_santa_on_worktable.jpg) | ![Diary style render](assets/demo/realworld/render_diary_on_notebook.jpg) |
+
+| Real cursive sample → card on a desk | Learned-from-real vs synthetic style |
+|---|---|
+| ![Pocock render](assets/demo/realworld/render_pocock_on_card.jpg) | ![Comparison](assets/demo/realworld/compare_real_vs_synth.jpg) |
+
 ## Features
 
 - **Paste text in** — automatic word-wrap and pagination across as many pages as needed.

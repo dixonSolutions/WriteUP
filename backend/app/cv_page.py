@@ -13,24 +13,49 @@ import numpy as np
 from .config import CANONICAL_PAGE_HEIGHT
 
 # A detected quad must cover at least this fraction of the photo to be trusted.
-MIN_AREA_FRACTION = 0.18
+# Low enough for pages that are a modest part of a cluttered desk scene.
+MIN_AREA_FRACTION = 0.08
 
 
 def _order_quad(pts: np.ndarray) -> np.ndarray:
-    """Order 4 points as top-left, top-right, bottom-right, bottom-left."""
+    """Order 4 points as top-left, top-right, bottom-right, bottom-left.
+
+    Angular sort around the centroid — robust for strongly rotated quads and
+    quads clipped to the image border, where the classic sum/diff heuristic
+    mislabels corners.
+    """
     pts = pts.reshape(4, 2).astype(np.float32)
-    s = pts.sum(axis=1)
-    diff = np.diff(pts, axis=1).ravel()
-    ordered = np.zeros((4, 2), dtype=np.float32)
-    ordered[0] = pts[np.argmin(s)]      # TL: smallest x+y
-    ordered[2] = pts[np.argmax(s)]      # BR: largest x+y
-    ordered[1] = pts[np.argmin(diff)]   # TR: smallest x-y
-    ordered[3] = pts[np.argmax(diff)]   # BL: largest x-y
-    return ordered
+    centroid = pts.mean(axis=0)
+    # y grows downward in images, so ascending atan2 walks clockwise:
+    # above → right → below → left, i.e. TL → TR → BR → BL for a sane quad.
+    angles = np.arctan2(pts[:, 1] - centroid[1], pts[:, 0] - centroid[0])
+    ordered = pts[np.argsort(angles)]
+    # rotate so the top-left-most point (min x+y) is first
+    start = int(np.argmin(ordered.sum(axis=1)))
+    return np.roll(ordered, -start, axis=0)
+
+
+def _quad_is_valid(quad: np.ndarray, shape: tuple[int, int]) -> bool:
+    """Reject degenerate/non-convex quads from over-simplified contours."""
+    h, w = shape
+    quad_area = cv2.contourArea(quad.astype(np.float32))
+    if quad_area < MIN_AREA_FRACTION * h * w:
+        return False
+    pts = quad.reshape(4, 2)
+    # every edge must have real length
+    min_side = 0.04 * min(h, w)
+    for i in range(4):
+        if np.linalg.norm(pts[i] - pts[(i + 1) % 4]) < min_side:
+            return False
+    # near-convexity: quad area vs its convex hull (strict convexity rejects
+    # slightly-dented approximations that are still visually perfect)
+    hull = cv2.convexHull(pts.astype(np.float32))
+    hull_area = cv2.contourArea(hull)
+    return quad_area >= 0.6 * max(hull_area, 1e-6)
 
 
 def _largest_quad_from_mask(mask: np.ndarray) -> np.ndarray | None:
-    """Find the largest 4-point contour in a binary mask."""
+    """Find the largest *valid* 4-point contour in a binary mask."""
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
@@ -41,16 +66,24 @@ def _largest_quad_from_mask(mask: np.ndarray) -> np.ndarray | None:
         if area < img_area * MIN_AREA_FRACTION:
             continue
         peri = cv2.arcLength(cnt, True)
-        # Progressively simplify the polygon until we get 4 corners.
+        # Progressively simplify the polygon until we get a valid 4-corner quad.
+        found = None
         for eps_factor in (0.01, 0.02, 0.03, 0.05, 0.08):
             approx = cv2.approxPolyDP(cnt, eps_factor * peri, True)
             if len(approx) == 4:
-                return _order_quad(approx)
-        # Fallback: minimum-area rectangle of the biggest contour.
-        rect = cv2.minAreaRect(contours[0])
-        box = cv2.boxPoints(rect)
-        if cv2.contourArea(box.astype(np.int32)) >= img_area * MIN_AREA_FRACTION:
-            return _order_quad(box)
+                quad = _order_quad(approx)
+                if _quad_is_valid(quad, mask.shape):
+                    found = quad
+                    break
+        # Fallback: minimum-area rectangle around the contour.
+        if found is None:
+            box = cv2.boxPoints(cv2.minAreaRect(cnt))
+            quad = _order_quad(box)
+            if (cv2.contourArea(quad.astype(np.float32)) >= img_area * MIN_AREA_FRACTION
+                    and _quad_is_valid(quad, mask.shape)):
+                found = quad
+        if found is not None:
+            return found
     return None
 
 
@@ -68,8 +101,6 @@ def detect_page_quad(image_bgr: np.ndarray) -> tuple[np.ndarray | None, bool]:
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     gray = cv2.bilateralFilter(gray, 9, 60, 60)
 
-    quad = None
-
     # Strategy A: paper is usually the brightest large region → Otsu on blur.
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -80,7 +111,7 @@ def detect_page_quad(image_bgr: np.ndarray) -> tuple[np.ndarray | None, bool]:
     if quad is None:
         edges = cv2.Canny(blurred, 40, 120)
         edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
-        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
         quad = _largest_quad_from_mask(edges)
 
     if quad is None:
@@ -90,6 +121,14 @@ def detect_page_quad(image_bgr: np.ndarray) -> tuple[np.ndarray | None, bool]:
     if scale < 1:
         quad = quad / scale
 
+    # Pages photographed at an angle often extend past the frame — clip the
+    # quad to the image bounds (the visible part is what we can write on).
+    quad[:, 0] = np.clip(quad[:, 0], 0, w - 1)
+    quad[:, 1] = np.clip(quad[:, 1], 0, h - 1)
+    quad = _order_quad(quad)
+    if not _quad_is_valid(quad, (h, w)):
+        return None, False
+
     # If the quad covers nearly the whole frame, treat the photo as borderless.
     if cv2.contourArea(quad.astype(np.float32)) > 0.92 * (h * w):
         return None, False
@@ -97,14 +136,13 @@ def detect_page_quad(image_bgr: np.ndarray) -> tuple[np.ndarray | None, bool]:
     # Border-brightness check: if the ring *outside* the detected quad is
     # nearly as bright as the page interior, the "background" is actually
     # more paper (e.g. a full-frame page whose corners were darkened only by
-    # lens vignette) → treat the whole frame as the page.
+    # lens vignette or a soft lighting gradient) → treat the frame as the page.
     full_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     quad_mask = np.zeros((h, w), np.uint8)
     cv2.fillConvexPoly(quad_mask, quad.astype(np.int32), 255)
-    ring = cv2.copyMakeBorder(
-        np.ones((h - 2 * int(h * 0.03), w - 2 * int(w * 0.03)), np.uint8) * 0,
-        int(h * 0.03), int(h * 0.03), int(w * 0.03), int(w * 0.03),
-        cv2.BORDER_CONSTANT, value=255)
+    bh, bw = int(h * 0.03), int(w * 0.03)
+    ring = np.ones((h, w), np.uint8)
+    ring[bh:h - bh, bw:w - bw] = 0
     outside = (quad_mask == 0) & (ring > 0)
     inside = quad_mask > 0
     if outside.sum() > 500 and inside.sum() > 500:
