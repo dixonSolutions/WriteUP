@@ -116,3 +116,23 @@ transfers to pages of any size.
       selected papers so mixed-aspect page sets never overflow
 - [x] Bugfix: TunePanel null slant (auto mode) crashed `.toFixed` → null-safe
 
+### 2026-09-21 — Session 1: hardening, demo, release
+- [x] `setup.sh` validated from a clean tree (fresh venv + npm install, ~30 s)
+- [x] Production mode: FastAPI serves `frontend/dist` when built (single port)
+- [x] Verification suite passes twice on the fresh install (78/78 containment,
+      pagination, robustness)
+- [x] Demo video assembled from real browser frames
+      (`assets/demo/writeup_demo.mp4`, 13 s) + UI screenshots light/dark
+- [x] CDP note: occluded tabs throttle the compositor — `Page.captureScreenshot`
+      needs `fromSurface: false` for fresh frames
+- [x] Public repo: https://github.com/dixonSolutions/WriteUP
+
+## Known limitations / future ideas
+
+- Text is not auto-aligned to existing ruled lines on the paper (pitch is
+  learned from the *style*, not the page). A "snap to rules" mode could
+  measure line pitch from the page photo itself.
+- Glyph shapes come from fonts; a future sampler could cut real glyphs from
+  the sample image and reassemble them (true handwriting forgery mode).
+- Detection assumes a roughly rectangular, mostly-visible page.
+

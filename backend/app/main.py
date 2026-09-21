@@ -328,3 +328,15 @@ def files(kind: str, filename: str) -> FileResponse:
     if roots[kind].resolve() not in path.parents or not path.exists():
         raise HTTPException(404, "File not found")
     return FileResponse(path)
+
+
+# ------------------------------------------------------------- production SPA
+# When the frontend has been built (`npm run build`), serve it from the API
+# port too — registered after every /api route so the API always wins.
+from .config import PROJECT_ROOT  # noqa: E402
+
+_DIST = PROJECT_ROOT / "frontend" / "dist"
+if _DIST.exists():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="spa")

@@ -21,13 +21,19 @@ paper's perspective, lighting and grain.
 
 ## Demo
 
+**Video:** [assets/demo/writeup_demo.mp4](assets/demo/writeup_demo.mp4) — paste text → pick paper → pick style → handwritten page.
+
 | Page found by CV | Handwritten result |
 |---|---|
 | ![Detected page](assets/demo/overlay_Plain_on_light_desk.jpg) | ![Rendered page](assets/demo/render_upload_test.jpg) |
 
 | Learned style on ruled paper | Cursive on a dark desk |
 |---|---|
-| ![Ruled](assets/demo/render_test2.jpg) | ![Dark desk](assets/demo/render_test1.jpg) |
+| ![Ruled](assets/demo/render_test2.jpg) | ![Dark desk](assets/demo/render_dark_desk_final.jpg) |
+
+| Multi-page: page 1 (ruled) | Multi-page: page 3 (desk photo) |
+|---|---|
+| ![Page 1](assets/demo/multipage_p1.jpg) | ![Page 3](assets/demo/multipage_p3.jpg) |
 
 Dark mode UI:
 
